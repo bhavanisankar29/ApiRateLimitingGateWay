@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # API Rate Limiter
 
 A Basic rate limiting gateway built with Spring Boot and Spring Cloud Gateway. This project implements the Token Bucket algorithm with Redis for distributed rate limiting.
@@ -31,7 +30,7 @@ A Basic rate limiting gateway built with Spring Boot and Spring Cloud Gateway. T
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/bhavanisankar29/ApiRateLimitingGateWay.git
    cd ApiRateLimiter
    ```
 

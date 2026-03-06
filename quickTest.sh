@@ -9,13 +9,41 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+TEST_CLIENT_ID='127.0.0.1'
+STATUS_URL='http://localhost:8080/gateway/rate-limit/status'
+TEST_URL='http://localhost:8080/api/test'
+
+fetch_status() {
+    curl -s -H "X-Forwarded-For: $TEST_CLIENT_ID" "$STATUS_URL" 2>/dev/null
+}
+
+extract_available_tokens() {
+    if command -v jq >/dev/null 2>&1; then
+        tokens=$(echo "$1" | jq -r '.availableTokens // empty' 2>/dev/null)
+    else
+        tokens=$(echo "$1" | sed -n 's/.*"availableTokens"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+    fi
+
+    if [ -n "$tokens" ]; then
+        echo "$tokens"
+    else
+        echo "unknown"
+    fi
+}
+
+echo "1. Initial Rate Limit Status:"
+initial_status=$(fetch_status)
+echo "$initial_status" | jq . 2>/dev/null || echo "$initial_status"
+initial_tokens=$(extract_available_tokens "$initial_status")
+echo ""
+
 # Make requests
 echo "4. Making 20 requests (capacity is 10)..."
 success_count=0
 blocked_count=0
 
 for i in {1..20}; do
-    response=$(curl -s -w "\n%{http_code}" http://localhost:8080/api/test 2>/dev/null)
+    response=$(curl -s -H "X-Forwarded-For: $TEST_CLIENT_ID" -w "\n%{http_code}" "$TEST_URL" 2>/dev/null)
     http_code=$(echo "$response" | tail -n1)
     
     if [ "$http_code" = "200" ]; then
@@ -32,9 +60,9 @@ echo ""
 
 # Final status
 echo "5. Final Rate Limit Status:"
-final_status=$(curl -s http://localhost:8080/gateway/rate-limit/status)
+final_status=$(fetch_status)
 echo "$final_status" | jq . 2>/dev/null || echo "$final_status"
-final_tokens=$(echo "$final_status" | jq -r '.availableTokens' 2>/dev/null || echo "unknown")
+final_tokens=$(extract_available_tokens "$final_status")
 echo ""
 
 # Summary

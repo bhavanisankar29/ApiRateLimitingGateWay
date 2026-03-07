@@ -1,193 +1,220 @@
 # API Rate Limiter
 
-A Basic rate limiting gateway built with Spring Boot and Spring Cloud Gateway. This project implements the Token Bucket algorithm with Redis for distributed rate limiting.
+This project is a Spring Cloud Gateway application that applies Redis-backed token bucket rate limiting to all requests routed through `/api/**`.
 
-## Features
+The gateway listens on port `8080` and forwards matching traffic to a backend server configured by `rate-limiter.api-server-url`. A small mock backend is included in this repository as `simpleServer.py`, which runs on port `8081` by default.
 
-- **Token Bucket Algorithm**: Efficient rate limiting algorithm for controlling API traffic
-- **Distributed Rate Limiting**: Redis-backed rate limiting for distributed systems
-- **Spring Cloud Gateway Integration**: Seamless integration with Spring Cloud Gateway
-- **Configurable Limits**: Easily configure capacity, refill rate, and timeout settings
-- **Reactive Architecture**: Non-blocking, high-performance request handling with Project Reactor
-- **Health Check Endpoint**: Built-in health monitoring for the gateway service
+## What It Does
 
-## Tech Stack
+- Applies token bucket rate limiting per client IP.
+- Stores token state in Redis so rate limiting works across multiple gateway instances.
+- Uses `X-Forwarded-For` when present to identify the client.
+- Exposes status and health endpoints for local testing.
+- Proxies `/api/**` traffic to the configured backend after stripping the `/api` prefix.
 
-- **Java 21**
-- **Spring Boot 3.2.0**
-- **Spring Cloud Gateway** (2023.0.0)
-- **Redis** for distributed state management
-- **Gradle** for build management
-- **Lombok** for reducing boilerplate code
+## Stack
+
+- Java 21
+- Spring Boot 3.2.0
+- Spring Cloud Gateway 2023.0.0
+- Redis with Jedis
+- Gradle Wrapper
+- Lombok
 
 ## Prerequisites
 
-- Java 21 or higher
-- Redis server running (default: localhost:6379)
-- Gradle 7.x or higher (included via wrapper)
-
-## Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/bhavanisankar29/ApiRateLimitingGateWay.git
-   cd ApiRateLimiter
-   ```
-
-2. **Ensure Redis is running**
-   ```bash
-   # Using Docker
-   docker run -d -p 6379:6379 redis:latest
-   
-   # Or start your local Redis instance
-   redis-server
-   ```
-
-3. **Build the project**
-   ```bash
-   ./gradlew build
-   ```
+- Java 21
+- Redis running on `localhost:6379`, or equivalent config overrides
+- Bash if you want to run `quickTest.sh`
 
 ## Configuration
 
-Configure the rate limiter through `application.properties`:
+Current defaults from `src/main/resources/application.properties`:
 
 ```properties
 spring.application.name=ApiRateLimiter
 server.port=8080
 
-# Redis Configuration
+spring.cloud.gateway.discovery.locator.enabled=true
+
 spring.data.redis.host=localhost
 spring.data.redis.port=6379
 spring.data.redis.timeout=2000
 
-# Rate Limiter Configuration
-rate-limiter.capacity=10              # Maximum tokens in the bucket
-rate-limiter.refill-rate=1            # Tokens refilled per second
+rate-limiter.capacity=10
+rate-limiter.refill-rate=1
 rate-limiter.api-server-url=http://localhost:8081
-rate-limiter.timeout=5000             # Request timeout in milliseconds
-
-# Gateway Discovery
-spring.cloud.gateway.discovery.locator.enabled=true
+rate-limiter.timeout=5000
 ```
 
-### Configuration Properties
+### Property Reference
 
-| Property | Default | Description |
-|----------|---------|-------------|
-| `rate-limiter.capacity` | 10 | Maximum number of tokens the bucket can hold |
-| `rate-limiter.refill-rate` | 1 | Number of tokens added per second |
-| `rate-limiter.api-server-url` | http://localhost:8081 | Backend API server URL |
-| `rate-limiter.timeout` | 5000 | Request timeout in milliseconds |
-| `spring.data.redis.host` | localhost | Redis server host |
-| `spring.data.redis.port` | 6379 | Redis server port |
+| Property | Default | Meaning |
+|----------|---------|---------|
+| `server.port` | `8080` | Gateway HTTP port |
+| `spring.data.redis.host` | `localhost` | Redis host |
+| `spring.data.redis.port` | `6379` | Redis port |
+| `spring.data.redis.timeout` | `2000` | Redis timeout in milliseconds |
+| `rate-limiter.capacity` | `10` | Maximum tokens available per client bucket |
+| `rate-limiter.refill-rate` | `1` | Tokens added per second |
+| `rate-limiter.api-server-url` | `http://localhost:8081` | Upstream server that receives routed `/api/**` traffic |
+| `rate-limiter.timeout` | `5000` | Reserved timeout property currently kept in config |
 
-## Running the Application
+## Project Workflow
+
+This is the request flow for traffic that enters the gateway through `/api/**`:
+
+1. A client sends a request to the gateway on port `8080`.
+2. Spring Cloud Gateway matches the request against the route configured in `GatewayConfig`.
+3. The route applies the `TokenBucketRateLimiterFilter` before forwarding the request.
+4. The filter determines the client ID, using `X-Forwarded-For` first and the remote IP as a fallback.
+5. The filter calls `RateLimiterService` to check whether the client is allowed to consume a token.
+6. `RateLimiterServiceImpl` executes a Redis Lua script so token refill and token consumption happen atomically.
+7. If a token is available, the request continues through the gateway and is forwarded to the upstream server configured by `rate-limiter.api-server-url`.
+8. If no token is available, the gateway stops the request and returns `429 Too Many Requests` with rate-limit metadata.
+9. For allowed requests, the gateway adds rate-limit headers to the response before returning the upstream response to the client.
+
+## Local Run
+
+### 1. Start Redis
+
+Using Docker:
+
+```bash
+docker run --name api-rate-limiter-redis -p 6379:6379 redis:latest
+```
+
+Or start a local Redis instance however you normally run it.
+
+### 2. Start the mock backend
+
+The repository includes a simple Python server for local routing tests:
+
+```bash
+python simpleServer.py
+```
+
+That server responds on `http://localhost:8081` and returns JSON for any HTTP method.
+
+### 3. Start the gateway
+
+On macOS or Linux:
 
 ```bash
 ./gradlew bootRun
 ```
 
-The gateway will start on `http://localhost:8080`
+On Windows PowerShell:
 
-## API Endpoints
-
-### Health Check
-```
-GET /gateway/health
+```powershell
+.\gradlew.bat bootRun
 ```
 
-**Response:**
+### 4. Build or test
+
+On macOS or Linux:
+
+```bash
+./gradlew build
+./gradlew test
+```
+
+On Windows PowerShell:
+
+```powershell
+.\gradlew.bat build
+.\gradlew.bat test
+```
+## Rate Limit Behavior
+
+The limiter uses a token bucket per client ID.
+
+- A new client starts with a full bucket.
+- Each allowed request consumes one token.
+- Tokens refill at `rate-limiter.refill-rate` per second.
+- If the bucket is empty, the gateway returns `429 Too Many Requests`.
+
+Default behavior with the current config:
+
+- Capacity: `10`
+- Refill rate: `1` token per second
+- Immediate burst: up to `10` requests for a new client
+
+When a request is blocked, the response body looks like this:
+
 ```json
 {
-  "status": "UP",
-  "service": "Rate Limiter Gateway"
+    "error": "Rate limit exceeded",
+    "clientId": "127.0.0.1",
+    "retryAfter": 1
 }
 ```
 
-## How It Works
+The gateway also adds these headers when it can resolve token state:
 
-### Token Bucket Algorithm
+- `X-RateLimit-Limit`
+- `X-RateLimit-Remaining`
+- `Retry-After` on `429` responses
 
-The Token Bucket algorithm works by:
+## Quick Test Script
 
-1. Maintaining a "bucket" with a maximum capacity
-2. Tokens are added to the bucket at a fixed refill rate
-3. Each incoming request consumes one token
-4. If tokens are available, the request is allowed
-5. If no tokens are available, the request is rejected with HTTP 429 (Too Many Requests)
+`quickTest.sh` exercises the gateway with a fixed client ID of `127.0.0.1`.
 
-**Example:**
-- Capacity: 10 tokens
-- Refill Rate: 1 token/second
-- Maximum sustainable throughput: 1 request/second
-- Burst capacity: up to 10 requests at once (if bucket is full)
+It does the following:
 
-### Rate Limiting Response
+1. Calls `/gateway/rate-limit/status` and prints the initial token count.
+2. Sends 20 requests to `/api/test` with the same `X-Forwarded-For` header.
+3. Prints how many requests were allowed versus blocked.
+4. Calls `/gateway/rate-limit/status` again and prints the final token count.
 
-When a request exceeds the rate limit:
+Run it after Redis, the mock backend, and the gateway are already running:
 
-**Status Code:** `429 Too Many Requests`
-
-**Response Body:**
-```json
-{
-  "error": "Rate limited exceeded",
-  "clientId": "client-123"
-}
+```bash
+bash quickTest.sh
 ```
 
-## Architecture
+If `jq` is installed, the script pretty-prints JSON. Without `jq`, it still runs and falls back to plain output parsing.
 
-```
-Client Request
-    ↓
-[TokenBucketRateLimiterFilter]
-    ↓
-[RateLimiterService]
-    ↓
-[Redis] ← Token count & client state
-    ↓
-Allowed/Rejected Decision
-    ↓
-Backend API or Error Response
+## Failure Mode
+
+If Redis is unavailable during a rate-limit check, the service currently fails open and allows the request. Status reads fall back to reporting full capacity when Redis cannot be reached.
+
+## Project Layout
+
+```text
+src/main/java/com/application/apiratelimiter/
+├── ApiRateLimiterApplication.java
+├── config/
+│   ├── GatewayConfig.java
+│   ├── RateLimiterProperties.java
+│   └── RedisProperties.java
+├── controller/
+│   └── StatusController.java
+├── filter/
+│   └── TokenBucketRateLimiterFilter.java
+└── service/
+        ├── RateLimiterService.java
+        └── RateLimiterServiceImpl.java
 ```
 
-## Project Structure
+Supporting files:
 
-```
-src/
-├── main/
-│   ├── java/com/application/apiratelimiter/
-│   │   ├── ApiRateLimiterApplication.java
-│   │   ├── config/
-│   │   │   ├── GatewayConfig.java
-│   │   │   ├── RateLimiterProperties.java
-│   │   │   └── RedisProperties.java
-│   │   ├── controller/
-│   │   │   └── StatusController.java
-│   │   ├── filter/
-│   │   │   └── TokenBucketRateLimiterFilter.java
-│   │   └── service/
-│   │       ├── RateLimiterService.java
-│   │       └── RateLimiterServiceImpl.java
-│   └── resources/
-│       └── application.properties
-└── test/
-    └── java/com/application/apiratelimiter/
-        └── ApiRateLimiterApplicationTests.java
-```
+- `src/main/resources/application.properties` for runtime configuration
+- `simpleServer.py` for a local mock server
+- `quickTest.sh` for an end-to-end manual test
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/your-feature`)
-3. Commit your changes (`git commit -m 'Add some feature'`)
-4. Push to the branch (`git push origin feature/your-feature`)
-5. Open a Pull Request
+Contributions are welcome.
+
+1. Fork the repository.
+2. Create a feature branch for your change.
+3. Make the code or documentation update.
+4. Run the relevant checks locally.
+5. Open a pull request with a clear summary of the change.
+
+For behavior changes, include the reason for the change and the impact on rate limiting or routing behavior.
 
 ## Author
 
-Bhavani Sankar Katta - https://github.com/bhavanisankar29
-
----
+Bhavani Sankar Katta -  https://github.com/bhavanisankar29

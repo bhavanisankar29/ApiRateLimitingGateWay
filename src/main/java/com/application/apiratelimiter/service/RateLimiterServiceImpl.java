@@ -96,6 +96,7 @@ public class RateLimiterServiceImpl implements RateLimiterService {
         return tokens
         """;
 
+    // Method to check if the request is allowed based on the IP address of the client.
     @Override
     public boolean isAllowed(String clientId) {
         String tokenKey = TOKENS_KEY_PREFIX + clientId;
